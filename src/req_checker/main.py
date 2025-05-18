@@ -22,10 +22,14 @@ def run():
         'current_year': str(datetime.now().year)
     }
     
+    result = "Не удалось получить результат"
+
     try:
-        ReqChecker().crew().kickoff(inputs=inputs)
+        result = ReqChecker().crew().kickoff(inputs=inputs).raw
     except Exception as e:
         raise Exception(f"An error occurred while running the crew: {e}")
+    
+    print(result)
 
 def run_in_streamlit(topic:str, current_year:int) -> str:
     """

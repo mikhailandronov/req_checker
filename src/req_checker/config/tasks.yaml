@@ -1,17 +1,25 @@
-research_task:
+req_methodology_task:
   description: >
-    Conduct a thorough research about {topic}
-    Make sure you find any interesting and relevant information given
-    the current year is {current_year}.
+    Сформировать видение идеального документа с описанием требований к информационной системе (RFP, ТЗ, ФТТ) для 
+    проведения конкурсной процедуры выбора поставщика (исполнителя всех работ по разработке этой системы)
+    Рассказать, какие разделы должны быть в документе с требованиями, какие аспекты в них должны быть отражены, 
+    на какие вопросы должны быть даны ответы по каждому из этих аспектов.
+    Вернуть результат ИСКЛЮЧИТЕЛЬНО в виде Python списка, 
+    содержащего словари с элементами 'aspect' и 'questions'. Например:
+    [
+      {'aspect'='Требования к интеграции', 'questions'=['С какими системами интегрируется?','Какие данные передаются?', 'Какой протокол используется?']},
+      {'aspect'='Требования к плану работ', 'questions'=['Каковы этапы проекта?', 'Каковы результаты каждого этапа?']},
+      {'aspect'='Требования к приемке и оплате', 'questions'=['Как осуществляется приемка?','Каковы критерии выполнения работы?','Какие документы подтверждают выполнение работ и приемку?', 'Когда производится оплата?']}
+    ]
+    
   expected_output: >
-    A list with 10 bullet points of the most relevant information about {topic}
-  agent: researcher
+    Python список словарей с элементами 'aspect' и 'questions', где 'aspect' содержит строку с названием 
+    аспекта требований, а 'questions' содержит список строк с вопросами по этому аспекту. По каждому аспекту должно быть не менее 5 вопросов! 
+    Например:
+    [
+      {'aspect'='Требования к интеграции', 'questions'=['С какими системами интегрируется?','Какие данные передаются?', 'Какой протокол используется?']},
+      {'aspect'='Требования к плану работ', 'questions'=['Каковы этапы проекта?', 'Каковы результаты каждого этапа?']},
+      {'aspect'='Требования к приемке и оплате', 'questions'=['Как осуществляется приемка?','Каковы критерии выполнения работы?','Какие документы подтверждают выполнение работ и приемку?', 'Когда производится оплата?']}
+    ]
+  agent: req_methodologist
 
-reporting_task:
-  description: >
-    Review the context you got and expand each topic into a full section for a report.
-    Make sure the report is detailed and contains any and all relevant information.
-  expected_output: >
-    A fully fledged report with the main topics, each with a full section of information.
-    Formatted as markdown without '```'
-  agent: reporting_analyst

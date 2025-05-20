@@ -2,12 +2,16 @@ import streamlit as st
 from dotenv import load_dotenv, find_dotenv
 import os
 import io
+import json # Для работы с JSON
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain.text_splitter import MarkdownHeaderTextSplitter
+# Если MarkdownHeaderTextSplitter не найден в langchain.text_splitter, попробуйте:
+# from langchain_text_splitters import MarkdownHeaderTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
+from langchain_core.documents import Document # для fallback
 
 # Загрузка переменных окружения (для OPENAI_API_KEY)
 load_dotenv(find_dotenv())
@@ -17,8 +21,8 @@ if not os.getenv("OPENAI_API_KEY"):
     st.error("Ключ OPENAI_API_KEY не найден. Пожалуйста, установите его в .env файле или переменных окружения.")
     st.stop()
 
-# Структура вопросов (предоставленная вами)
-QUESTIONS_STRUCTURE = [
+# Структура вопросов ПО УМОЛЧАНИЮ
+DEFAULT_QUESTIONS_STRUCTURE = [
     {
         "aspect": "Общие требования к системе",
         "questions": [
@@ -43,62 +47,74 @@ QUESTIONS_STRUCTURE = [
         ]
     }
 ]
+# Для краткости я сократил списки вопросов в DEFAULT_QUESTIONS_STRUCTURE,
+# но вы должны использовать свою полную структуру.
 
 # Константа для ответа "Нет сведений"
 NO_INFORMATION_FOUND_TEXT = "Информация отсутствует в предоставленном документе."
 NO_INFORMATION_FOUND_MARKDOWN = f"<span style='color:red;'>{NO_INFORMATION_FOUND_TEXT}</span>"
 
+# --- Функции для работы с вопросами ---
+def validate_questions_structure(data):
+    """Простая валидация структуры загруженных вопросов."""
+    if not isinstance(data, list):
+        return False
+    for item in data:
+        if not isinstance(item, dict) or "aspect" not in item or "questions" not in item:
+            return False
+        if not isinstance(item["aspect"], str) or not isinstance(item["questions"], list):
+            return False
+        for q_item in item["questions"]:
+            if not isinstance(q_item, str): # Или dict, если вопросы сложнее
+                 return False
+    return True
 
+# --- Основные функции RAG (остаются без изменений) ---
 def setup_rag_pipeline_from_bytes(file_bytes: bytes) -> RetrievalQA:
     """
     Настраивает RAG пайплайн на основе байтов Markdown файла.
     """
     try:
-        # 1. Декодирование байтов в строку
         markdown_content = file_bytes.decode('utf-8')
     except UnicodeDecodeError:
         st.error("Ошибка декодирования файла. Убедитесь, что это текстовый файл в кодировке UTF-8.")
         return None
 
-    # 2. Разделение документа на чанки
-    # MarkdownHeaderTextSplitter хорошо подходит для документов с четкой структурой заголовков
     headers_to_split_on = [
-        ("#", "H1"),
-        ("##", "H2"),
-        ("###", "H3"),
-        ("####", "H4"),
+        ("#", "H1"), ("##", "H2"), ("###", "H3"), ("####", "H4"),
     ]
-    markdown_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=headers_to_split_on)
-    docs = markdown_splitter.split_text(markdown_content)
+    try:
+        markdown_splitter = MarkdownHeaderTextSplitter(headers_to_split_on=headers_to_split_on, return_each_line=False) # Убрал strip_headers=False, если не нужно
+        docs = markdown_splitter.split_text(markdown_content)
+    except Exception as e:
+        st.warning(f"Ошибка при использовании MarkdownHeaderTextSplitter: {e}. Попытка базового разделения.")
+        docs = []
 
     if not docs:
-        st.warning("Документ не содержит текста или не удалось его разделить на части. Убедитесь, что Markdown размечен корректно.")
-        # Можно создать один большой документ, если разделение не удалось, но это менее эффективно
+        st.info("MarkdownHeaderTextSplitter не нашел подходящих заголовков или документ пуст. Используется CharacterTextSplitter.")
         from langchain_text_splitters import CharacterTextSplitter
-        from langchain_core.documents import Document
-        # fallback_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-        # docs = fallback_splitter.split_documents([Document(page_content=markdown_content)])
-        # if not docs:
-        st.error("Не удалось обработать документ.")
-        return None
+        fallback_splitter = CharacterTextSplitter(
+            separator="\n\n", chunk_size=1000, chunk_overlap=200,
+            length_function=len, is_separator_regex=False,
+        )
+        chunks = fallback_splitter.split_text(markdown_content)
+        if not chunks:
+            st.error("Не удалось разделить документ даже с помощью CharacterTextSplitter. Документ может быть пустым.")
+            return None
+        docs = [Document(page_content=chunk) for chunk in chunks]
 
-
-    # 3. Создание эмбеддингов
-    # Используем OpenAIEmbeddings, но можно заменить на HuggingFaceEmbeddings для локальных моделей
     try:
         embeddings = OpenAIEmbeddings(openai_api_key=os.getenv("OPENAI_API_KEY"), model='text-embedding-3-small')
     except Exception as e:
         st.error(f"Ошибка при инициализации OpenAI Embeddings: {e}")
         return None
 
-    # 4. Создание векторного хранилища в памяти (FAISS)
     try:
         vectorstore = FAISS.from_documents(docs, embeddings)
     except Exception as e:
         st.error(f"Ошибка при создании векторного хранилища FAISS: {e}")
         return None
 
-    # 5. Создание языковой модели (LLM)
     try:
         llm = ChatOpenAI(
             temperature=0,  
@@ -109,8 +125,6 @@ def setup_rag_pipeline_from_bytes(file_bytes: bytes) -> RetrievalQA:
         st.error(f"Ошибка при инициализации ChatOpenAI LLM: {e}")
         return None
 
-    # 6. Определение промпта для RAG
-    # Важно указать LLM, как поступать, если информация не найдена.
     prompt_template_string = f"""Используй следующие фрагменты контекста, чтобы ответить на вопрос в конце.
 Если ты не знаешь ответа или информация для ответа отсутствует в предоставленном контексте, четко скажи: "{NO_INFORMATION_FOUND_TEXT}".
 Не пытайся придумать ответ. Отвечай только на основе предоставленного контекста.
@@ -120,21 +134,14 @@ def setup_rag_pipeline_from_bytes(file_bytes: bytes) -> RetrievalQA:
 
 Вопрос: {{question}}
 Ответ:"""
-
     QA_PROMPT = PromptTemplate(
-        template=prompt_template_string, # Передаем строку, где NO_INFORMATION_FOUND_TEXT уже вставлено, а {context} и {question} - плейсхолдеры
+        template=prompt_template_string,
         input_variables=["context", "question"]
     )
 
-    # 7. Создание цепочки RetrievalQA
-    # chain_type="stuff" просто передает все найденные чанки в промпт.
-    # Для больших документов могут понадобиться другие типы (map_reduce, refine).
     qa_chain = RetrievalQA.from_chain_type(
-        llm=llm,
-        chain_type="stuff",
-        retriever=vectorstore.as_retriever(),
-        chain_type_kwargs={"prompt": QA_PROMPT},
-        return_source_documents=False # Можно установить True для отладки, чтобы видеть извлеченные чанки
+        llm=llm, chain_type="stuff", retriever=vectorstore.as_retriever(),
+        chain_type_kwargs={"prompt": QA_PROMPT}, return_source_documents=False
     )
     return qa_chain
 
@@ -144,48 +151,43 @@ def get_answers_for_structure(qa_chain: RetrievalQA, questions_data: list) -> li
     Получает ответы на все вопросы из структуры, используя RAG пайплайн.
     """
     results_by_aspect = []
-    if not qa_chain:
-        # Возвращаем пустые результаты, если пайплайн не был создан
+    if not qa_chain: # Если пайплайн не создан, возвращаем пустые результаты
         for aspect_item in questions_data:
-            aspect_name = aspect_item["aspect"]
-            processed_questions = []
-            for question_text in aspect_item["questions"]:
-                processed_questions.append({
-                    "question": question_text,
-                    "answer": NO_INFORMATION_FOUND_MARKDOWN
-                })
-            results_by_aspect.append({
-                "aspect": aspect_name,
-                "qa_pairs": processed_questions
-            })
+            processed_questions = [{"question": q_text, "answer": NO_INFORMATION_FOUND_MARKDOWN} for q_text in aspect_item["questions"]]
+            results_by_aspect.append({"aspect": aspect_item["aspect"], "qa_pairs": processed_questions})
         return results_by_aspect
+
+    total_questions_count = sum(len(item["questions"]) for item in questions_data)
+    questions_processed_count = 0
+    if total_questions_count == 0:
+        st.warning("Список вопросов пуст. Нечего обрабатывать.")
+        return []
+
+    progress_bar_container = st.empty() # Контейнер для прогресс-бара
 
     for aspect_item in questions_data:
         aspect_name = aspect_item["aspect"]
-        st.write(f"Обработка аспекта: {aspect_name}...")
+        st.write(f"Обработка аспекта: {aspect_name}...") # Для отладки или информации
         processed_questions = []
-        for i, question_text in enumerate(aspect_item["questions"]):
-            st.progress((i + 1) / len(aspect_item["questions"]), text=f"Вопрос {i+1}/{len(aspect_item['questions'])}")
+        for question_text in aspect_item["questions"]:
+            questions_processed_count += 1
+            progress_fraction = questions_processed_count / total_questions_count
+            progress_text = f"Обработка аспекта: {aspect_name} | Вопрос {questions_processed_count}/{total_questions_count}"
+            progress_bar_container.progress(progress_fraction, text=progress_text)
+
             try:
                 response = qa_chain.invoke({"query": question_text})
                 answer = response["result"].strip()
                 if NO_INFORMATION_FOUND_TEXT in answer or not answer:
                     answer_markdown = NO_INFORMATION_FOUND_MARKDOWN
                 else:
-                    answer_markdown = answer.replace("\n", "<br>") # Для корректного отображения переносов строк в Markdown таблице
+                    answer_markdown = answer.replace("\n", "<br>")
             except Exception as e:
                 st.warning(f"Ошибка при обработке вопроса '{question_text}': {e}")
                 answer_markdown = f"<span style='color:orange;'>Ошибка при получении ответа</span>"
-
-            processed_questions.append({
-                "question": question_text,
-                "answer": answer_markdown
-            })
-        results_by_aspect.append({
-            "aspect": aspect_name,
-            "qa_pairs": processed_questions
-        })
-        st.success(f"Аспект '{aspect_name}' обработан.")
+            processed_questions.append({"question": question_text, "answer": answer_markdown})
+        results_by_aspect.append({"aspect": aspect_name, "qa_pairs": processed_questions})
+    progress_bar_container.empty() # Убираем прогресс-бар
     return results_by_aspect
 
 
@@ -199,9 +201,8 @@ def format_results_to_markdown(results_data: list) -> str:
         markdown_output += "| Вопрос | Ответ |\n"
         markdown_output += "|---|---|\n"
         for qa_pair in aspect_result['qa_pairs']:
-            # Экранирование символа пайплайна в вопросе, если он там есть
             question_md = qa_pair['question'].replace('|', '\\|')
-            answer_md = qa_pair['answer'] # HTML для цвета уже включен
+            answer_md = qa_pair['answer']
             markdown_output += f"| {question_md} | {answer_md} |\n"
         markdown_output += "\n"
     return markdown_output
@@ -209,51 +210,103 @@ def format_results_to_markdown(results_data: list) -> str:
 # --- Streamlit UI ---
 st.set_page_config(layout="wide", page_title="Анализ документа по вопросам")
 st.title("Анализ Markdown документа на основе списка вопросов")
+
+# --- Управление вопросами ---
+st.sidebar.header("Управление списком вопросов")
+
+# Инициализация структуры вопросов в session_state, если ее там еще нет
+if 'current_questions_structure' not in st.session_state:
+    st.session_state.current_questions_structure = DEFAULT_QUESTIONS_STRUCTURE
+
+# Загрузка файла с вопросами
+uploaded_questions_file = st.sidebar.file_uploader(
+    "Загрузить свой список вопросов (JSON)",
+    type=['json']
+)
+
+if uploaded_questions_file is not None:
+    try:
+        questions_data = json.load(uploaded_questions_file)
+        if validate_questions_structure(questions_data):
+            st.session_state.current_questions_structure = questions_data
+            st.sidebar.success(f"Файл вопросов '{uploaded_questions_file.name}' успешно загружен и применен.")
+        else:
+            st.sidebar.error("Файл JSON имеет неверную структуру. Используется структура по умолчанию.")
+    except json.JSONDecodeError:
+        st.sidebar.error("Ошибка декодирования JSON. Убедитесь, что файл корректен. Используется структура по умолчанию.")
+    except Exception as e:
+        st.sidebar.error(f"Не удалось прочитать файл вопросов: {e}. Используется структура по умолчанию.")
+
+# Кнопка для скачивания текущего шаблона вопросов
+current_questions_json = json.dumps(st.session_state.current_questions_structure, indent=4, ensure_ascii=False)
+st.sidebar.download_button(
+    label="Скачать текущий список вопросов (JSON)",
+    data=current_questions_json,
+    file_name="questions_template.json",
+    mime="application/json"
+)
+
+if st.sidebar.button("Сбросить к вопросам по умолчанию"):
+    st.session_state.current_questions_structure = DEFAULT_QUESTIONS_STRUCTURE
+    st.sidebar.info("Список вопросов сброшен к значениям по умолчанию.")
+
+# Отображение текущего количества аспектов и вопросов
+st.sidebar.markdown("---")
+st.sidebar.markdown(f"**Текущая структура вопросов:**")
+st.sidebar.markdown(f"- Аспектов: {len(st.session_state.current_questions_structure)}")
+total_q = sum(len(aspect.get("questions", [])) for aspect in st.session_state.current_questions_structure)
+st.sidebar.markdown(f"- Всего вопросов: {total_q}")
+
+
+# --- Основная часть приложения ---
+st.header("1. Загрузка документа для анализа")
 st.write("""
-Загрузите Markdown файл и система попытается найти ответы на предопределенный список вопросов,
-используя RAG (Retrieval Augmented Generation) с OpenAI.
+Загрузите Markdown файл, к которому вы хотите задать вопросы.
 """)
+uploaded_document_file = st.file_uploader("Загрузите ваш Markdown документ (.md, .txt)", type=['md', 'txt'])
 
-uploaded_file = st.file_uploader("Загрузите ваш Markdown файл (.md)", type=['md', 'txt'])
+if uploaded_document_file is not None:
+    st.info(f"Документ '{uploaded_document_file.name}' загружен.")
 
-if uploaded_file is not None:
-    st.info(f"Файл '{uploaded_file.name}' загружен. Начинаю обработку...")
-
-    # Получаем байты из загруженного файла
-    file_bytes = uploaded_file.getvalue()
-
-    # 1. Создаем RAG пайплайн
-    with st.spinner("Индексирую документ и настраиваю RAG пайплайн... Это может занять некоторое время."):
-        qa_chain = setup_rag_pipeline_from_bytes(file_bytes)
-
-    if qa_chain:
-        st.success("RAG пайплайн успешно создан!")
-
-        # 2. Получаем ответы на вопросы
-        with st.spinner("Получаю ответы на вопросы... Это может занять несколько минут в зависимости от количества вопросов."):
-            answers_data = get_answers_for_structure(qa_chain, QUESTIONS_STRUCTURE)
-
-        # 3. Форматируем результаты в Markdown
-        with st.spinner("Форматирую результаты..."):
-            markdown_report = format_results_to_markdown(answers_data)
-
-        st.success("Анализ завершен!")
-        st.subheader("Результаты анализа:")
-        st.markdown(markdown_report, unsafe_allow_html=True)
-
-        # Кнопка для скачивания отчета
-        st.download_button(
-            label="Скачать отчет в Markdown",
-            data=markdown_report,
-            file_name=f"report_{uploaded_file.name}.md",
-            mime="text/markdown",
-        )
+    if not st.session_state.current_questions_structure or total_q == 0:
+        st.warning("Список вопросов пуст. Загрузите или сгенерируйте вопросы на боковой панели.")
     else:
-        st.error("Не удалось создать RAG пайплайн. Проверьте ошибки выше.")
+        st.header("2. Анализ документа")
+        if st.button("Начать анализ документа"):
+            file_bytes = uploaded_document_file.getvalue()
 
+            with st.spinner("Индексирую документ и настраиваю RAG пайплайн..."):
+                qa_chain = setup_rag_pipeline_from_bytes(file_bytes)
+
+            if qa_chain:
+                st.success("RAG пайплайн успешно создан!")
+
+                st.write("Получаю ответы на вопросы...")
+                # Используем структуру вопросов из session_state
+                answers_data = get_answers_for_structure(qa_chain, st.session_state.current_questions_structure)
+
+                if answers_data:
+                    with st.spinner("Форматирую результаты..."):
+                        markdown_report = format_results_to_markdown(answers_data)
+
+                    st.success("Анализ завершен!")
+                    st.header("3. Результаты анализа")
+                    st.markdown(markdown_report, unsafe_allow_html=True)
+
+                    st.download_button(
+                        label="Скачать отчет в Markdown",
+                        data=markdown_report,
+                        file_name=f"report_{uploaded_document_file.name}.md",
+                        mime="text/markdown",
+                    )
+                else:
+                    st.info("Нет данных для отображения. Возможно, список вопросов был пуст.")
+            else:
+                st.error("Не удалось создать RAG пайплайн. Проверьте ошибки выше.")
 else:
-    st.info("Пожалуйста, загрузите Markdown файл для начала анализа.")
+    st.info("Пожалуйста, загрузите Markdown документ для начала анализа.")
 
+st.sidebar.markdown("---")
 st.sidebar.header("О проекте")
 st.sidebar.info(
     "Этот инструмент использует LangChain и OpenAI для извлечения информации из "

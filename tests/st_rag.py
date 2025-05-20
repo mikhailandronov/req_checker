@@ -1,8 +1,9 @@
 import streamlit as st
 from dotenv import load_dotenv, find_dotenv
 import os
-import io
-import json # Для работы с JSON
+from io import BytesIO
+import pypandoc
+import json 
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain.text_splitter import MarkdownHeaderTextSplitter
@@ -118,7 +119,7 @@ def setup_rag_pipeline_from_bytes(file_bytes: bytes) -> RetrievalQA:
     try:
         llm = ChatOpenAI(
             temperature=0,  
-            model_name="gpt-4.1-nano", 
+            model_name="gpt-4.1", 
             openai_api_key=os.getenv("OPENAI_API_KEY")
         )
     except Exception as e:
@@ -209,7 +210,7 @@ def format_results_to_markdown(results_data: list) -> str:
 
 # --- Streamlit UI ---
 st.set_page_config(layout="wide", page_title="Анализ документа по вопросам")
-st.title("Анализ Markdown документа на основе списка вопросов")
+st.title("Анализ документа с требованиями")
 
 # --- Управление вопросами ---
 st.sidebar.header("Управление списком вопросов")
@@ -231,11 +232,11 @@ if uploaded_questions_file is not None:
             st.session_state.current_questions_structure = questions_data
             st.sidebar.success(f"Файл вопросов '{uploaded_questions_file.name}' успешно загружен и применен.")
         else:
-            st.sidebar.error("Файл JSON имеет неверную структуру. Используется структура по умолчанию.")
+            st.sidebar.error("Файл JSON имеет неверную структуру. Используется набор вопросов по умолчанию.")
     except json.JSONDecodeError:
-        st.sidebar.error("Ошибка декодирования JSON. Убедитесь, что файл корректен. Используется структура по умолчанию.")
+        st.sidebar.error("Ошибка декодирования JSON. Убедитесь, что файл корректен. Используется набор вопросов по умолчанию.")
     except Exception as e:
-        st.sidebar.error(f"Не удалось прочитать файл вопросов: {e}. Используется структура по умолчанию.")
+        st.sidebar.error(f"Не удалось прочитать файл вопросов: {e}. Используется набор вопросов по умолчанию.")
 
 # Кнопка для скачивания текущего шаблона вопросов
 current_questions_json = json.dumps(st.session_state.current_questions_structure, indent=4, ensure_ascii=False)
@@ -248,7 +249,7 @@ st.sidebar.download_button(
 
 if st.sidebar.button("Сбросить к вопросам по умолчанию"):
     st.session_state.current_questions_structure = DEFAULT_QUESTIONS_STRUCTURE
-    st.sidebar.info("Список вопросов сброшен к значениям по умолчанию.")
+    st.sidebar.info("Используется набор вопросов по умолчанию.")
 
 # Отображение текущего количества аспектов и вопросов
 st.sidebar.markdown("---")
@@ -261,9 +262,9 @@ st.sidebar.markdown(f"- Всего вопросов: {total_q}")
 # --- Основная часть приложения ---
 st.header("1. Загрузка документа для анализа")
 st.write("""
-Загрузите Markdown файл, к которому вы хотите задать вопросы.
+Загрузите документ с требованиями, анализ которого Вы хотите провести.
 """)
-uploaded_document_file = st.file_uploader("Загрузите ваш Markdown документ (.md, .txt)", type=['md', 'txt'])
+uploaded_document_file = st.file_uploader("Загрузите ваш документ (.md, .txt, .docx)", type=['md', 'txt', 'docx'])
 
 if uploaded_document_file is not None:
     st.info(f"Документ '{uploaded_document_file.name}' загружен.")
@@ -274,12 +275,36 @@ if uploaded_document_file is not None:
         st.header("2. Анализ документа")
         if st.button("Начать анализ документа"):
             file_bytes = uploaded_document_file.getvalue()
+            _, file_ext = os.path.splitext(uploaded_document_file.name)
+            st.toast(file_ext.upper())
 
-            with st.spinner("Индексирую документ и настраиваю RAG пайплайн..."):
+            if file_ext.upper() == ".DOCX":
+                with st.spinner("Конвертация... Пожалуйста, подождите."):
+                    try:
+                        # Получаем байты из загруженного файла
+                        docx_bytes = uploaded_document_file.getvalue() # или uploaded_file.read()
+                        
+                        # Конвертируем байты DOCX в строку Markdown
+                        markdown_output = pypandoc.convert_text(
+                            source=docx_bytes,
+                            to='gfm',  # Выбираем GitHub Flavored Markdown, он довольно популярен
+                            format='docx',
+                            # extra_args=['--wrap=none'] # Пример дополнительного аргумента Pandoc
+                        )
+
+                    except Exception as e:
+                        st.error(f"Ошибка во время конвертации: {e}")
+                        st.error("Убедитесь, что загруженный файл является корректным DOCX файлом.")
+                        if "pandoc document" in str(e).lower() or "pandoc exception" in str(e).lower():
+                            st.warning("Проверьте, что Pandoc корректно установлен и доступен.")
+
+                file_bytes = BytesIO(markdown_output.encode('utf-8')).getvalue()
+
+            with st.spinner("Индексирую документ..."):
                 qa_chain = setup_rag_pipeline_from_bytes(file_bytes)
 
             if qa_chain:
-                st.success("RAG пайплайн успешно создан!")
+                st.success("Индекс для RAG построен!")
 
                 st.write("Получаю ответы на вопросы...")
                 # Используем структуру вопросов из session_state
@@ -302,14 +327,14 @@ if uploaded_document_file is not None:
                 else:
                     st.info("Нет данных для отображения. Возможно, список вопросов был пуст.")
             else:
-                st.error("Не удалось создать RAG пайплайн. Проверьте ошибки выше.")
+                st.error("Не удалось создать индекс для RAG. Проверьте ошибки выше.")
 else:
-    st.info("Пожалуйста, загрузите Markdown документ для начала анализа.")
+    st.info("Пожалуйста, загрузите документ для начала анализа.")
 
 st.sidebar.markdown("---")
 st.sidebar.header("О проекте")
 st.sidebar.info(
-    "Этот инструмент использует LangChain и OpenAI для извлечения информации из "
-    "Markdown документов по заданному списку вопросов. "
-    "Он демонстрирует простой RAG-пайплайн с индексацией в памяти."
+    "Этот инструмент использует LangChain и LLM-модели для извлечения информации "
+    "из документов по заданному списку вопросов. \n"
+    "Список вопросов для анализа генерируется командой агентов на базе фреймворка CrewAI."
 )

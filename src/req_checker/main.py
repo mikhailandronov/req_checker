@@ -60,22 +60,6 @@ def get_aspects(aspect_questions_string: str) -> list[dict[str, tp.Any]]:
     
     return aspects_list
 
-# def run_process():
-#     """
-#     Run the crew.
-#     """
-
-#     filepath = "uploaded_files/FTT.docx" 
-#     questions = ['В чем цель проекта', 'Какая должность у Белинской']
-
-#     result = "Не удалось получить результат"
-
-#     try:
-#         result = ReqChecker().rag_crew(filepath=filepath, questions=questions).kickoff().raw
-#     except Exception as e:
-#         raise Exception(f"An error occurred while running the crew: {e}")
-    
-#     print(result)
 
 def run():
     """
@@ -102,23 +86,25 @@ def run():
     
 
 
-def run_in_streamlit(topic:str, current_year:int) -> str:
+def run_crew_in_streamlit() -> list[dict[str, tp.Any]]:
     """
     Run the crew from Streamlit app
     """
-    inputs = {
-        'topic': topic,
-        'current_year': str(current_year)
-    }
-    
-    result = "Не удалось сгенерировать отчет"
+    result = "Could not get result from agents"
 
     try:
-        result = ReqChecker().crew().kickoff(inputs=inputs).raw
+        result = ReqChecker().methodology_crew().kickoff().raw
     except Exception as e:
         raise Exception(f"An error occurred while running the crew: {e}")
     
-    return result
+    aspects = get_aspects(result)
+
+    try:
+        result = ReqChecker().req_details_crew(aspects= aspects).kickoff().raw
+    except Exception as e:
+        raise Exception(f"An error occurred while running the crew: {e}")
+
+    return get_aspects(result)
 
 
 def train():

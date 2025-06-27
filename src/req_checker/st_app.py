@@ -72,7 +72,6 @@ def generate_questions():
         st.sidebar.error("Ошибка: Сгенерированная структура вопросов невалидна.")
         return None # Возвращаем None, чтобы обработчик мог это учесть
 
-# --- Основные функции RAG (остаются без изменений) ---
 def setup_rag_pipeline_from_bytes(file_bytes: bytes) -> RetrievalQA:
     """
     Настраивает RAG пайплайн на основе байтов Markdown файла.

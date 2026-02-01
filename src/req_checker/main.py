@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 import sys
 import warnings
 import ast
@@ -116,7 +115,7 @@ def train():
         'current_year': str(datetime.now().year)
     }
     try:
-        ReqChecker().crew().train(n_iterations=int(sys.argv[1]), filename=sys.argv[2], inputs=inputs)
+        ReqChecker().crew().train(n_iterations=int(sys.argv[1]), filename=sys.argv[2], inputs=inputs) # type: ignore
 
     except Exception as e:
         raise Exception(f"An error occurred while training the crew: {e}")
@@ -126,7 +125,7 @@ def replay():
     Replay the crew execution from a specific task.
     """
     try:
-        ReqChecker().crew().replay(task_id=sys.argv[1])
+        ReqChecker().crew().replay(task_id=sys.argv[1]) # type: ignore
 
     except Exception as e:
         raise Exception(f"An error occurred while replaying the crew: {e}")
@@ -141,7 +140,7 @@ def test():
     }
     
     try:
-        ReqChecker().crew().test(n_iterations=int(sys.argv[1]), eval_llm=sys.argv[2], inputs=inputs)
+        ReqChecker().crew().test(n_iterations=int(sys.argv[1]), eval_llm=sys.argv[2], inputs=inputs) # type: ignore
 
     except Exception as e:
         raise Exception(f"An error occurred while testing the crew: {e}")

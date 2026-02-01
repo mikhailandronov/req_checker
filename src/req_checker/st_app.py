@@ -16,6 +16,8 @@ from langchain.prompts import PromptTemplate
 from langchain_core.documents import Document # для fallback
 from req_checker.main import run_crew_in_streamlit
 
+import tempfile # Не забудьте добавить импорт в начало файла
+
 # Загрузка переменных окружения (для OPENAI_API_KEY)
 load_dotenv(find_dotenv())
 
@@ -106,7 +108,7 @@ def setup_rag_pipeline_from_bytes(file_bytes: bytes) -> RetrievalQA:
         docs = [Document(page_content=chunk) for chunk in chunks]
 
     try:
-        embeddings = OpenAIEmbeddings(openai_api_key=os.getenv("OPENAI_API_KEY"), model='text-embedding-3-small')
+        embeddings = OpenAIEmbeddings(model='text-embedding-3-small')
     except Exception as e:
         st.error(f"Ошибка при инициализации OpenAI Embeddings: {e}")
         return None
@@ -120,8 +122,7 @@ def setup_rag_pipeline_from_bytes(file_bytes: bytes) -> RetrievalQA:
     try:
         llm = ChatOpenAI(
             temperature=0,
-            model_name="gpt-4.1", 
-            openai_api_key=os.getenv("OPENAI_API_KEY")
+            model="gpt-4.1"
         )
     except Exception as e:
         st.error(f"Ошибка при инициализации ChatOpenAI LLM: {e}")
@@ -293,20 +294,33 @@ if uploaded_document_file is not None:
     else:
         st.header("2. Анализ документа")
         if st.button("Начать анализ документа"):
+            uploaded_document_file.seek(0)
             file_bytes_content = uploaded_document_file.getvalue()
             _, file_ext = os.path.splitext(uploaded_document_file.name)
-            # st.toast(file_ext.upper()) # Можно убрать или оставить для отладки
 
-            if file_ext.lower() == ".docx": # Используем lower() для надежности
+            if file_ext.lower() == ".docx":
                 with st.spinner("Конвертация DOCX в Markdown... Пожалуйста, подождите."):
                     try:
-                        markdown_output_str = pypandoc.convert_text(
-                            source=file_bytes_content, # Используем исходные байты DOCX
-                            to='gfm',
-                            format='docx',
-                        )
-                        file_bytes_content = markdown_output_str.encode('utf-8') # Обновляем file_bytes_content
-                        st.info("DOCX успешно сконвертирован в Markdown.")
+                        # 1. Создаем временный файл
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp_file:
+                            # Обязательно сбрасываем указатель в начало перед чтением
+                            uploaded_document_file.seek(0) 
+                            tmp_file.write(uploaded_document_file.read())
+                            tmp_file_path = tmp_file.name
+                        
+                        # 2. Конвертируем через файл (это надежно)
+                        try:
+                            markdown_output_str = pypandoc.convert_file(
+                                source_file=tmp_file_path,
+                                to='gfm'
+                            )
+                            file_bytes_content = markdown_output_str.encode('utf-8')
+                            st.info("DOCX успешно сконвертирован в Markdown.")
+                        finally:
+                            # 3. Удаляем мусор
+                            if os.path.exists(tmp_file_path):
+                                os.remove(tmp_file_path)
+
                     except Exception as e:
                         st.error(f"Ошибка во время конвертации DOCX: {e}")
                         if "pandoc" in str(e).lower():

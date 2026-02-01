@@ -6,6 +6,8 @@ authors = [{ name = "Your Name", email = "you@example.com" }]
 requires-python = ">=3.10,<3.13"
 dependencies = [
     "crewai[tools]>=0.120.1,<1.0.0",
+    "faiss-cpu>=1.13.2",
+    "pypandoc>=1.16.2",
     "streamlit>=1.45.1",
 ]
 
